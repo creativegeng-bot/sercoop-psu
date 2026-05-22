@@ -2,8 +2,8 @@ import { createClient } from '@supabase/supabase-js'
 import { useState, useEffect, useRef, useCallback, memo } from 'react'
 
 const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  'https://rartcrxprbcoylqwjvjx.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJhcnRjcnhwcmJjb3lscXdqdmp4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1MDQ1MDYsImV4cCI6MjA5NDA4MDUwNn0.41svsIGvzuaPBVjyD3XjZceGlL2bXd_BePcsqgDSd6o'
 )
 
 const T = {
