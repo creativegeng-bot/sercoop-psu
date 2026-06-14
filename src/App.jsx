@@ -1753,15 +1753,29 @@ function PageAdmin({user,userInfo,perm}) {
   },[])
 
   const loadAll = async() => {
-    const [u,us,ar,bc,st] = await Promise.all([
+    const [u,us,ar,bc,st,pm] = await Promise.all([
       supabase.from('sercoop_units').select('*').order('sort_order'),
-      supabase.from('sercoop_users').select('*').order('full_name'),
+      supabase.from('sercoop_users').select('*,unit:sercoop_units(unit_name,unit_code)').order('full_name'),
       supabase.from('sercoop_approval_rules').select('*').order('category_code'),
       supabase.from('sercoop_budget_categories').select('*').order('sort_order'),
       supabase.from('sercoop_settings').select('*'),
+      supabase.from('sercoop_permissions').select('*,user:sercoop_users(full_name)').eq('module','sarbun'),
     ])
     if(u.data) setUnits(u.data)
-    if(us.data) setUsers(us.data)
+    if(us.data) {
+      // merge permission role into user data
+      const pmData = pm.data||[]
+      const merged = us.data.map(user => {
+        const userPerm = pmData.find(p=>p.user_id===user.user_id)
+        return {
+          ...user,
+          role: userPerm?.role||'staff',
+          unit_name: user.unit?.unit_name||user.unit_name||'',
+          unit_code: user.unit?.unit_code||'',
+        }
+      })
+      setUsers(merged)
+    }
     if(ar.data) setApprovalRules(ar.data)
     if(bc.data) setBudgetCats(bc.data)
     if(st.data) {
@@ -1770,9 +1784,12 @@ function PageAdmin({user,userInfo,perm}) {
   }
 
   const saveSetting = async(key,value) => {
-    await supabase.from('sercoop_settings').upsert({setting_key:key,setting_value:value,updated_by:user?.id,updated_at:new Date().toISOString()},{onConflict:'setting_key'})
-    setSettings(p=>({...p,[key]:value}))
-    setMsg('✅ บันทึกสำเร็จ!')
+    const {error} = await supabase.from('sercoop_settings').upsert(
+      {setting_key:key,setting_value:value,updated_at:new Date().toISOString()},
+      {onConflict:'setting_key'}
+    )
+    if(!error){setSettings(p=>({...p,[key]:value}));setMsg('✅ บันทึกสำเร็จ!')}
+    else setMsg('❌ '+error.message)
   }
 
   const tabs = [
@@ -1874,14 +1891,15 @@ function PageAdmin({user,userInfo,perm}) {
         {/* ผู้ใช้งาน */}
         {tab==='users'&&(
           <div>
-            <div style={{fontWeight:700,color:T.primary,fontSize:15,marginBottom:16}}>
-              👥 ผู้ใช้งาน ({users.length} คน)
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+              <div style={{fontWeight:700,color:T.primary,fontSize:15}}>👥 ผู้ใช้งาน ({users.length} คน)</div>
+              <Btn color={T.primary} sm onClick={()=>{setEditItem({is_active:true,role:'staff'});setShowModal('add_user')}}>＋ เพิ่มผู้ใช้งาน</Btn>
             </div>
             <table style={{width:'100%',borderCollapse:'collapse',background:'#fff',
               borderRadius:10,overflow:'hidden',boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
               <thead>
                 <tr style={{background:T.primary}}>
-                  {['ชื่อ-สกุล','ตำแหน่ง','หน่วยงาน','สิทธิ์','สถานะ',''].map(h=>(
+                  {['ชื่อ-สกุล','ตำแหน่ง','หน่วยงาน','อีเมล','สิทธิ์','สถานะ',''].map(h=>(
                     <th key={h} style={{padding:'9px 12px',textAlign:'left',color:'#fff',fontWeight:600,fontSize:12}}>{h}</th>
                   ))}
                 </tr>
@@ -1892,6 +1910,7 @@ function PageAdmin({user,userInfo,perm}) {
                     <td style={{padding:'9px 12px',fontWeight:600}}>{u.full_name||'—'}</td>
                     <td style={{padding:'9px 12px',fontSize:12,color:T.g600}}>{u.position_name||'—'}</td>
                     <td style={{padding:'9px 12px',fontSize:12,color:T.g400}}>{u.unit_name||'—'}</td>
+                    <td style={{padding:'9px 12px',fontSize:11,color:T.g400}}>{u.email||'—'}</td>
                     <td style={{padding:'9px 12px'}}>
                       <span style={{background:T.primary3,color:T.primary,borderRadius:4,padding:'2px 8px',fontSize:11,fontWeight:700}}>
                         {PERMISSIONS[u.role]?.label||'ผู้ใช้งาน'}
@@ -1909,13 +1928,24 @@ function PageAdmin({user,userInfo,perm}) {
                 ))}
               </tbody>
             </table>
-            <div style={{marginTop:12,padding:12,background:T.primary3,borderRadius:8,fontSize:12,color:T.primary}}>
-              💡 เพิ่มผู้ใช้ใหม่ที่ Supabase → Authentication → Users แล้วรัน SQL:<br/>
-              <code style={{background:T.g200,padding:'2px 6px',borderRadius:3,fontSize:11}}>
-                insert into sercoop_users (user_id,full_name,position_name,unit_id) values ('uuid','ชื่อ','ตำแหน่ง','unit_id');
-              </code>
-            </div>
           </div>
+        )}
+
+        {showModal==='add_user'&&editItem&&(
+          <Modal title="＋ เพิ่มผู้ใช้งานใหม่" onClose={()=>setShowModal(null)} width={520}>
+            <AddUserForm units={units} onSave={async(data)=>{
+              try {
+                const selUnit=units.find(u=>u.id===data.unit_id)
+                await supabase.from('sercoop_users').insert({
+                  full_name:data.full_name,position_name:data.position_name,
+                  unit_id:data.unit_id||null,unit_name:selUnit?.unit_name||'',
+                  email:data.email,phone:data.phone||'',is_active:true,
+                })
+                setShowModal(null);loadAll()
+                setMsg('✅ บันทึกข้อมูลผู้ใช้แล้ว — ให้ผู้ใช้ login ด้วยอีเมลนี้แล้วกลับมากำหนดสิทธิ์')
+              }catch(e){setMsg('❌ '+e.message);setShowModal(null)}
+            }}/>
+          </Modal>
         )}
 
         {/* อำนาจอนุมัติ */}
@@ -2069,20 +2099,64 @@ function PageAdmin({user,userInfo,perm}) {
 
       {/* Unit Edit Modal */}
       {showModal==='unit'&&editItem&&(
-        <Modal title={editItem.id?'แก้ไขหน่วยธุรกิจ':'เพิ่มหน่วยธุรกิจ'} onClose={()=>setShowModal(null)} width={520}>
+        <Modal title={editItem.id?'แก้ไขหน่วยธุรกิจ/ฝ่าย':'เพิ่มหน่วยธุรกิจ/ฝ่าย'} onClose={()=>setShowModal(null)} width={520}>
           <UnitForm item={editItem} onSave={async(data)=>{
-            if(data.id) await supabase.from('sercoop_units').update(data).eq('id',data.id)
-            else await supabase.from('sercoop_units').insert(data)
-            setShowModal(null);loadAll();setMsg('✅ บันทึกสำเร็จ!')
+            const payload = {
+              unit_code:data.unit_code, unit_name:data.unit_name,
+              unit_type:data.unit_type||'business_unit',
+              manager_name:data.manager_name||null,
+              manager_position:data.manager_position||null,
+              phone:data.phone||null, address:data.address||null,
+              is_active:data.is_active!==false, sort_order:data.sort_order||0,
+            }
+            let error
+            if(data.id) {
+              const res = await supabase.from('sercoop_units').update(payload).eq('id',data.id)
+              error = res.error
+            } else {
+              const res = await supabase.from('sercoop_units').insert(payload)
+              error = res.error
+            }
+            if(!error){setShowModal(null);loadAll();setMsg('✅ บันทึกสำเร็จ!')}
+            else setMsg('❌ '+error.message)
           }}/>
         </Modal>
       )}
 
       {/* User Edit Modal */}
       {showModal==='user'&&editItem&&(
-        <Modal title="แก้ไขสิทธิ์ผู้ใช้งาน" onClose={()=>setShowModal(null)}>
+        <Modal title="แก้ไขข้อมูลผู้ใช้งาน" onClose={()=>setShowModal(null)}>
           <UserPermForm item={editItem} units={units} onSave={async(data)=>{
-            await supabase.from('sercoop_users').update(data).eq('id',data.id)
+            const selUnit = units.find(u=>u.id===data.unit_id)
+            // update sercoop_users
+            await supabase.from('sercoop_users').update({
+              full_name:data.full_name,
+              position_name:data.position_name,
+              phone:data.phone||'',
+              unit_id:data.unit_id||null,
+              unit_name:selUnit?.unit_name||'',
+              is_active:data.is_active,
+            }).eq('id',data.id)
+            // update or insert permission
+            if(data.user_id) {
+              const {data:existing} = await supabase.from('sercoop_permissions')
+                .select('id').eq('user_id',data.user_id).eq('module','sarbun').single()
+              if(existing) {
+                await supabase.from('sercoop_permissions').update({
+                  role:data.role, unit_id:data.unit_id||null, is_active:data.is_active
+                }).eq('id',existing.id)
+              } else {
+                await supabase.from('sercoop_permissions').insert({
+                  user_id:data.user_id, module:'sarbun',
+                  role:data.role, unit_id:data.unit_id||null, is_active:data.is_active
+                })
+              }
+              // also update old user_roles for backward compat
+              await supabase.from('user_roles').update({
+                role:data.role, full_name:data.full_name,
+                dept:selUnit?.unit_name||'', position:data.position_name||''
+              }).eq('user_id',data.user_id)
+            }
             setShowModal(null);loadAll();setMsg('✅ บันทึกสำเร็จ!')
           }}/>
         </Modal>
@@ -2092,9 +2166,29 @@ function PageAdmin({user,userInfo,perm}) {
       {showModal==='rule'&&editItem&&(
         <Modal title={editItem.id?'แก้ไขกฎอนุมัติ':'เพิ่มกฎอนุมัติ'} onClose={()=>setShowModal(null)} width={640}>
           <ApprovalRuleForm item={editItem} onSave={async(data)=>{
-            if(data.id) await supabase.from('sercoop_approval_rules').update(data).eq('id',data.id)
-            else await supabase.from('sercoop_approval_rules').insert(data)
-            setShowModal(null);loadAll();setMsg('✅ บันทึกสำเร็จ!')
+            const payload = {
+              category_code:data.category_code, category_name:data.category_name,
+              manager_limit:parseFloat(data.manager_limit)||0,
+              deputy_gm_limit:parseFloat(data.deputy_gm_limit)||0,
+              gm_limit:parseFloat(data.gm_limit)||0,
+              treasurer_limit:parseFloat(data.treasurer_limit)||0,
+              chairman_limit:parseFloat(data.chairman_limit)||0,
+              exec_board_limit:parseFloat(data.exec_board_limit)||0,
+              full_board_limit:parseFloat(data.full_board_limit)||0,
+              require_subcommittee:data.require_subcommittee||false,
+              subcommittee_threshold:parseFloat(data.subcommittee_threshold)||50000,
+              notes:data.notes||'', is_active:data.is_active!==false,
+            }
+            let error
+            if(data.id){
+              const res = await supabase.from('sercoop_approval_rules').update(payload).eq('id',data.id)
+              error = res.error
+            } else {
+              const res = await supabase.from('sercoop_approval_rules').insert(payload)
+              error = res.error
+            }
+            if(!error){setShowModal(null);loadAll();setMsg('✅ บันทึกสำเร็จ!')}
+            else setMsg('❌ '+error.message)
           }}/>
         </Modal>
       )}
@@ -2103,9 +2197,21 @@ function PageAdmin({user,userInfo,perm}) {
       {showModal==='budget_cat'&&editItem&&(
         <Modal title={editItem.id?'แก้ไขหมวดงบ':'เพิ่มหมวดงบ'} onClose={()=>setShowModal(null)}>
           <BudgetCatForm item={editItem} onSave={async(data)=>{
-            if(data.id) await supabase.from('sercoop_budget_categories').update(data).eq('id',data.id)
-            else await supabase.from('sercoop_budget_categories').insert(data)
-            setShowModal(null);loadAll();setMsg('✅ บันทึกสำเร็จ!')
+            const payload = {
+              category_code:data.category_code, category_name:data.category_name,
+              parent_code:data.parent_code||null, level:parseInt(data.level)||1,
+              is_active:data.is_active!==false, sort_order:data.sort_order||0,
+            }
+            let error
+            if(data.id){
+              const res = await supabase.from('sercoop_budget_categories').update(payload).eq('id',data.id)
+              error = res.error
+            } else {
+              const res = await supabase.from('sercoop_budget_categories').insert(payload)
+              error = res.error
+            }
+            if(!error){setShowModal(null);loadAll();setMsg('✅ บันทึกสำเร็จ!')}
+            else setMsg('❌ '+error.message)
           }}/>
         </Modal>
       )}
@@ -2136,9 +2242,16 @@ function UnitForm({item,onSave}) {
 }
 
 function UserPermForm({item,units,onSave}) {
-  const [form,setForm] = useState({...item})
+  const [form,setForm] = useState({
+    role:'staff', ...item,
+    unit_id: item.unit_id||'',
+  })
   return(
     <div>
+      <div style={{background:T.primary3,borderRadius:7,padding:'8px 12px',
+        marginBottom:14,fontSize:12,color:T.primary,fontWeight:600}}>
+        👤 {item.full_name||'ผู้ใช้งาน'} · {item.email||''}
+      </div>
       <div style={{marginBottom:10}}>
         <label style={{fontSize:12,color:T.g600,display:'block',marginBottom:4,fontWeight:600}}>สิทธิ์การใช้งาน</label>
         <select value={form.role||'staff'} onChange={e=>setForm(p=>({...p,role:e.target.value}))} style={inpStyle}>
@@ -2152,15 +2265,16 @@ function UserPermForm({item,units,onSave}) {
           {units.map(u=><option key={u.id} value={u.id}>{u.unit_code}. {u.unit_name}</option>)}
         </select>
       </div>
-      {[['ชื่อ-สกุล','full_name'],['ตำแหน่ง','position_name'],['เบอร์โทร','phone']].map(([l,k])=>(
+      {[['ชื่อ-สกุล','full_name','text'],['ตำแหน่ง','position_name','text'],['เบอร์โทร','phone','text']].map(([l,k,t])=>(
         <div key={k} style={{marginBottom:10}}>
           <label style={{fontSize:12,color:T.g600,display:'block',marginBottom:4,fontWeight:600}}>{l}</label>
-          <input value={form[k]||''} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} style={inpStyle}/>
+          <input type={t} value={form[k]||''} onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} style={inpStyle}/>
         </div>
       ))}
       <div style={{marginBottom:14}}>
         <label style={{display:'flex',alignItems:'center',gap:6,fontSize:13,cursor:'pointer'}}>
-          <input type="checkbox" checked={form.is_active!==false} onChange={e=>setForm(p=>({...p,is_active:e.target.checked}))}/>
+          <input type="checkbox" checked={form.is_active!==false}
+            onChange={e=>setForm(p=>({...p,is_active:e.target.checked}))}/>
           เปิดใช้งาน
         </label>
       </div>
@@ -2791,6 +2905,69 @@ function PageRegulations({perm}) {
 // ═══════════════════════════════
 // ROOT APP
 // ═══════════════════════════════
+// ═══════════════════════════════
+// ADD USER FORM
+// ═══════════════════════════════
+function AddUserForm({units, onSave}) {
+  const [form, setForm] = useState({
+    full_name:'', email:'', phone:'',
+    position_name:'', unit_id:'', role:'staff'
+  })
+  const [msg, setMsg] = useState('')
+
+  const handleSave = () => {
+    if(!form.full_name||!form.email){setMsg('❌ กรุณากรอกชื่อและอีเมล');return}
+    onSave(form)
+  }
+
+  return(
+    <div>
+      {msg&&<div style={{background:T.redL,color:T.red,borderRadius:7,
+        padding:'8px 12px',fontSize:12,marginBottom:12,fontWeight:600}}>{msg}</div>}
+      <div style={{background:T.amberL,borderRadius:8,padding:'10px 12px',
+        marginBottom:14,fontSize:12,color:'#7c4a00'}}>
+        💡 กรอกข้อมูลผู้ใช้ก่อน เมื่อผู้ใช้ Login ครั้งแรกด้วยอีเมลนี้ 
+        ระบบจะดึงข้อมูลโปรไฟล์และสิทธิ์ที่กำหนดไว้อัตโนมัติ
+      </div>
+      {[
+        ['ชื่อ-สกุล *','full_name','text'],
+        ['อีเมล *','email','email'],
+        ['เบอร์โทร','phone','text'],
+        ['ตำแหน่ง','position_name','text'],
+      ].map(([l,k,t])=>(
+        <div key={k} style={{marginBottom:10}}>
+          <label style={{fontSize:12,color:T.g600,display:'block',marginBottom:4,fontWeight:600}}>{l}</label>
+          <input type={t} value={form[k]||''} 
+            onChange={e=>setForm(p=>({...p,[k]:e.target.value}))} 
+            style={inpStyle}/>
+        </div>
+      ))}
+      <div style={{marginBottom:10}}>
+        <label style={{fontSize:12,color:T.g600,display:'block',marginBottom:4,fontWeight:600}}>หน่วยงาน</label>
+        <select value={form.unit_id} onChange={e=>setForm(p=>({...p,unit_id:e.target.value}))} style={inpStyle}>
+          <option value="">-- เลือกหน่วยงาน --</option>
+          {units.map(u=><option key={u.id} value={u.id}>{u.unit_code}. {u.unit_name}</option>)}
+        </select>
+      </div>
+      <div style={{marginBottom:16}}>
+        <label style={{fontSize:12,color:T.g600,display:'block',marginBottom:4,fontWeight:600}}>สิทธิ์การใช้งาน</label>
+        <select value={form.role} onChange={e=>setForm(p=>({...p,role:e.target.value}))} style={inpStyle}>
+          {Object.entries(PERMISSIONS).map(([k,v])=>(
+            <option key={k} value={k}>{v.label}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{background:T.greenL,borderRadius:8,padding:'10px 12px',marginBottom:14,fontSize:12,color:T.green}}>
+        ✅ หลังบันทึกแล้ว ผู้ใช้สามารถ:<br/>
+        1. สมัครที่ Supabase ด้วยอีเมลนี้<br/>
+        2. หรือ Admin เพิ่มที่ Supabase → Authentication → Users<br/>
+        3. ระบบจะจับคู่ข้อมูลโดยอัตโนมัติ
+      </div>
+      <Btn full color={T.primary} onClick={handleSave}>💾 บันทึกข้อมูลผู้ใช้</Btn>
+    </div>
+  )
+}
+
 export default function App() {
   const [user, setUser] = useState(null)
   const [userInfo, setUserInfo] = useState(null)
